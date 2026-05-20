@@ -1,17 +1,20 @@
-"""Test isolé du formatter pageviews."""
 import sys
+import os
 from pathlib import Path
 from datetime import datetime, timezone
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "dags"))
+os.environ["DATALAKE_ROOT"] = "/opt/airflow/datalake"
+os.environ["SPARK_HOME"] = "/opt/spark"
 
-from lib.pageviews_formatter import convert_pageviews
-import lib.pageviews_formatter as pf
+sys.path.insert(0, "/opt/airflow/dags")
 
-pf.DATALAKE_ROOT = Path(__file__).parent.parent / "datalake"
+from lib.pageviews_formatter import get_spark, convert_pageviews
 
 if __name__ == "__main__":
     date = datetime(2026, 5, 18, tzinfo=timezone.utc)
+    spark = get_spark()
+    spark.sparkContext.setLogLevel("ERROR")
     for project in ["en_wikipedia", "fr_wikipedia"]:
-        convert_pageviews(project, date)
-    print("\nTest OK — vérifie datalake/formatted/wikimedia_analytics/Pageviews/")
+        convert_pageviews(project, date, spark)
+    spark.stop()
+    print("\nTest OK")

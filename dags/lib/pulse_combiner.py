@@ -13,19 +13,19 @@ Lecture :
 """
 
 import os
-import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-
-DATALAKE_ROOT = Path(os.environ.get("DATALAKE_ROOT", "/opt/airflow/datalake"))
-SPARK_HOME = os.environ.get("SPARK_HOME", "/opt/spark")
-
-# Ajoute PySpark au path
-sys.path.insert(0, f"{SPARK_HOME}/python")
-sys.path.insert(0, f"{SPARK_HOME}/python/lib/py4j-0.10.9.7-src.zip")
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
+
+os.environ["JAVA_HOME"] = "/usr/lib/jvm/java-17-openjdk-amd64"
+import pyspark
+os.environ["SPARK_HOME"] = os.path.dirname(pyspark.__file__)
+os.environ["JAVA_HOME"] = "/usr/lib/jvm/java-17-openjdk-amd64"
+import pyspark
+os.environ["SPARK_HOME"] = os.path.dirname(pyspark.__file__)
+DATALAKE_ROOT = Path(os.environ.get("DATALAKE_ROOT", "/opt/airflow/datalake"))
 
 
 def get_spark():
@@ -42,8 +42,8 @@ def get_spark():
 def combine(date: datetime) -> None:
     date_str = date.strftime("%Y%m%d")
 
-    edits_path     = str(DATALAKE_ROOT / "formatted" / "wikimedia_stream" / "Edits" / date_str)
-    pageviews_path = str(DATALAKE_ROOT / "formatted" / "wikimedia_analytics" / "Pageviews" / date_str)
+    edits_path     = str(DATALAKE_ROOT / "formatted" / "wikimedia_stream" / "Edits" / date_str / "edits.snappy.parquet")
+    pageviews_path = str(DATALAKE_ROOT / "formatted" / "wikimedia_analytics" / "Pageviews" / date_str / "pageviews_*.snappy.parquet")
     trending_dir   = DATALAKE_ROOT / "usage" / "wikipediaPulse" / "TrendingArticles" / date_str
     leadlag_dir    = DATALAKE_ROOT / "usage" / "wikipediaPulse" / "EditLeadLag" / date_str
 
@@ -61,7 +61,7 @@ def combine(date: datetime) -> None:
     df_pageviews = spark.read.parquet(pageviews_path)
     print(f"  → {df_pageviews.count()} pageview entries")
 
-    # ── Agrégation des éditions par article ───────────────────────────────────
+    # Agrégation des éditions par article
     df_edit_agg = (
         df_edits
         .groupBy("title", "project")
@@ -74,14 +74,12 @@ def combine(date: datetime) -> None:
         )
     )
 
-    # ── Normalisation du titre pageviews pour matcher avec edits ─────────────
-    # Pageviews : "2026_United_States" → "2026 United States"
-    # Edits : "2026 United States" (déjà normalisé dans formatter)
+    # Normalisation du titre pageviews
     df_pageviews_norm = df_pageviews.withColumn(
         "title_norm", F.regexp_replace(F.col("article"), "_", " ")
     )
 
-    # ── Join éditions × pageviews ─────────────────────────────────────────────
+    # Join éditions × pageviews
     df_joined = df_edit_agg.join(
         df_pageviews_norm,
         (df_edit_agg["title"] == df_pageviews_norm["title_norm"]),
@@ -99,8 +97,7 @@ def combine(date: datetime) -> None:
         F.coalesce(F.col("rank"), F.lit(9999)).alias("pageview_rank"),
     )
 
-    # ── Score trending = edit_count * unique_editors / log(pageviews + 1) ─────
-    # Un article avec beaucoup d'édits mais peu de vues = signal fort
+    # Score trending
     df_trending = df_joined.withColumn(
         "trending_score",
         F.round(
@@ -110,7 +107,7 @@ def combine(date: datetime) -> None:
         )
     ).orderBy(F.col("trending_score").desc())
 
-    # ── Lead-Lag : articles avec édits ET pageviews ───────────────────────────
+    # Lead-Lag
     df_leadlag = df_joined.filter(
         (F.col("edit_count") > 1) & (F.col("pageviews") > 0)
     ).withColumn(
@@ -118,7 +115,7 @@ def combine(date: datetime) -> None:
         F.round(F.col("edit_count") / F.log(F.col("pageviews") + 2), 4)
     ).orderBy(F.col("edit_to_view_ratio").desc())
 
-    # ── Sauvegarde ────────────────────────────────────────────────────────────
+    # Sauvegarde
     trending_out = str(trending_dir / "trending.snappy.parquet")
     leadlag_out  = str(leadlag_dir / "leadlag.snappy.parquet")
 
@@ -128,7 +125,6 @@ def combine(date: datetime) -> None:
     print(f"  → Trending articles saved to {trending_out}")
     print(f"  → Lead-lag saved to {leadlag_out}")
 
-    # ── Preview top 10 trending ───────────────────────────────────────────────
     print("\nTop 10 trending articles :")
     df_trending.select("title", "edit_count", "unique_editors", "pageviews", "trending_score").show(10, truncate=50)
 
@@ -138,7 +134,6 @@ def combine(date: datetime) -> None:
 def produce_pulse(**kwargs):
     execution_date = kwargs["dag_run"].execution_date
     target_date = execution_date.replace(tzinfo=timezone.utc)
-
     print(f"=== produce_pulse | {target_date.strftime('%Y-%m-%d')} ===")
     combine(target_date)
     print("=== produce_pulse done ===")
