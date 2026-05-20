@@ -1,13 +1,15 @@
 """
 Wikipedia Pulse DAG.
 
-Pipeline qui croise les éditions Wikipedia (streaming) et les pageviews (batch quotidien)
-pour détecter les événements mondiaux émergents.
+Pipeline qui croise les éditions Wikipedia (streaming via Kafka) et les pageviews
+(batch quotidien) pour détecter les événements mondiaux émergents.
 
-Architecture suivie :
-    edits_stream_to_raw    ──> raw_to_formatted_edits     ──┐
-                                                             ├──> produce_pulse ──> index_to_elastic
-    pageviews_to_raw       ──> raw_to_formatted_pageviews ──┘
+Architecture :
+    edits_stream_to_raw    --> raw_to_formatted_edits     --+
+                                                            +--> produce_pulse --> index_to_elastic
+    pageviews_to_raw       --> raw_to_formatted_pageviews --+
+
+Les fonctions métier sont importées depuis dags/lib/.
 """
 
 from datetime import datetime, timedelta
@@ -15,61 +17,19 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-
-# ─── Source 1 : Streaming (Wikimedia EventStreams) ─────────────────────────────
-
-def edits_stream_to_raw(**kwargs):
-    """Consomme le flux SSE de Wikimedia EventStreams pendant une fenêtre donnée
-    et stocke les éditions brutes dans :
-        datalake/raw/wikimedia_stream/Edits/{YYYYMMDD}/edits.ndjson
-    """
-    print("TODO: Connect to https://stream.wikimedia.org/v2/stream/recentchange")
+# Import des vraies fonctions métier depuis lib/
+from lib.edits_consumer import edits_stream_to_raw
+from lib.edits_formatter import raw_to_formatted_edits
+from lib.pageviews_fetcher import pageviews_to_raw
+from lib.pageviews_formatter import raw_to_formatted_pageviews
+from lib.pulse_combiner import produce_pulse
 
 
-def raw_to_formatted_edits(**kwargs):
-    """Lit les éditions brutes NDJSON, normalise (dates UTC, colonnes nettoyées),
-    et écrit en parquet dans :
-        datalake/formatted/wikimedia_stream/Edits/{YYYYMMDD}/edits.snappy.parquet
-    """
-    print("TODO: Read raw NDJSON, normalize, save as parquet")
-
-
-# ─── Source 2 : Batch (Wikimedia Analytics REST API) ───────────────────────────
-
-def pageviews_to_raw(**kwargs):
-    """Appelle l'API Wikimedia Analytics pour récupérer les pageviews du jour
-    précédent et stocke le JSON brut dans :
-        datalake/raw/wikimedia_analytics/Pageviews/{YYYYMMDD}/pageviews.json
-    """
-    print("TODO: Call https://wikimedia.org/api/rest_v1/metrics/pageviews")
-
-
-def raw_to_formatted_pageviews(**kwargs):
-    """Lit les pageviews brutes JSON et écrit en parquet dans :
-        datalake/formatted/wikimedia_analytics/Pageviews/{YYYYMMDD}/pageviews.snappy.parquet
-    """
-    print("TODO: Read raw JSON, normalize, save as parquet")
-
-
-# ─── Combination + Indexing ────────────────────────────────────────────────────
-
-def produce_pulse(**kwargs):
-    """Croise éditions et pageviews :
-      - détecte les pics d'éditions par article (anomalies)
-      - calcule le décalage édition → lecture (lead-lag)
-    Sortie dans :
-        datalake/usage/wikipediaPulse/TrendingArticles/{YYYYMMDD}/
-        datalake/usage/wikipediaPulse/EditLeadLag/{YYYYMMDD}/
-    """
-    print("TODO: Join edits + pageviews, detect anomalies, compute lead-lag")
-
-
+# index_to_elastic : pas encore implémenté (cours Elasticsearch à venir)
 def index_to_elastic(**kwargs):
-    """Indexe la couche usage dans Elasticsearch pour exposition Kibana."""
-    print("TODO: Push usage data into Elasticsearch indices")
+    """Placeholder — sera implémenté après le cours Elasticsearch."""
+    print("TODO: index_to_elastic — en attente du cours Elasticsearch")
 
-
-# ─── DAG Definition ────────────────────────────────────────────────────────────
 
 with DAG(
     "wikipedia_pulse",
@@ -92,11 +52,11 @@ with DAG(
     pour détecter les événements émergents avant qu'ils deviennent viraux.
     """
 
-    # Source 1 (streaming)
+    # Source 1 (streaming via Kafka)
     t1a = PythonOperator(task_id="edits_stream_to_raw", python_callable=edits_stream_to_raw)
     t2a = PythonOperator(task_id="raw_to_formatted_edits", python_callable=raw_to_formatted_edits)
 
-    # Source 2 (batch)
+    # Source 2 (batch API)
     t1b = PythonOperator(task_id="pageviews_to_raw", python_callable=pageviews_to_raw)
     t2b = PythonOperator(task_id="raw_to_formatted_pageviews", python_callable=raw_to_formatted_pageviews)
 
