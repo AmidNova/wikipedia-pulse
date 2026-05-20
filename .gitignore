@@ -1,0 +1,27 @@
+# Airflow
+logs/
+plugins/
+config/
+
+# Données du datalake — ne pas versionner (régénérables, potentiellement lourdes)
+datalake/raw/
+datalake/formatted/
+datalake/usage/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Env
+.env
+
+# Spark
+spark-warehouse/
+!.gitkeep
