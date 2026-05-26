@@ -30,6 +30,7 @@ def index_to_elastic(**kwargs):
     """Placeholder — sera implémenté après le cours Elasticsearch."""
     print("TODO: index_to_elastic — en attente du cours Elasticsearch")
 
+# ok
 
 with DAG(
     "wikipedia_pulse",
