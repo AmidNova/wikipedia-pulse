@@ -15,4 +15,4 @@ USER airflow
 
 # PySpark + dépendances du projet
 RUN pip install --no-cache-dir \
-    requests pandas pyarrow kafka-python elasticsearch pyspark==4.1.1
+    requests "pandas>=2.2" pyarrow kafka-python elasticsearch pyspark==4.1.1 scikit-learn

@@ -10,7 +10,7 @@ sys.path.insert(0, "/opt/airflow/dags")
 from lib.elastic_indexer import index_to_elastic
 
 class FakeDagRun:
-    execution_date = datetime(2026, 5, 20, tzinfo=timezone.utc)
+    execution_date = datetime(2026, 6, 4, tzinfo=timezone.utc)
 
 if __name__ == "__main__":
     index_to_elastic(dag_run=FakeDagRun())

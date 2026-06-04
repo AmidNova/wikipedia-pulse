@@ -1,30 +1,21 @@
 """
 pulse_combiner.py
 
-Combine éditions et pageviews via Spark pour détecter les articles trending.
-
-Lecture :
-    formatted/wikimedia_stream/Edits/{YYYYMMDD}/edits.snappy.parquet
-    formatted/wikimedia_analytics/Pageviews/{YYYYMMDD}/pageviews_*.snappy.parquet
-
-Écriture :
-    usage/wikipediaPulse/TrendingArticles/{YYYYMMDD}/trending.snappy.parquet
-    usage/wikipediaPulse/EditLeadLag/{YYYYMMDD}/leadlag.snappy.parquet
+Combine éditions et pageviews via Spark, puis détecte les événements émergents
+via Machine Learning (Isolation Forest).
 """
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+os.environ["JAVA_HOME"] = "/usr/lib/jvm/java-17-openjdk-amd64"
+import pyspark
+os.environ["SPARK_HOME"] = os.path.dirname(pyspark.__file__)
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
-os.environ["JAVA_HOME"] = "/usr/lib/jvm/java-17-openjdk-amd64"
-import pyspark
-os.environ["SPARK_HOME"] = os.path.dirname(pyspark.__file__)
-os.environ["JAVA_HOME"] = "/usr/lib/jvm/java-17-openjdk-amd64"
-import pyspark
-os.environ["SPARK_HOME"] = os.path.dirname(pyspark.__file__)
 DATALAKE_ROOT = Path(os.environ.get("DATALAKE_ROOT", "/opt/airflow/datalake"))
 
 
@@ -39,8 +30,32 @@ def get_spark():
     )
 
 
+def detect_emerging(pdf):
+    """Détection d'anomalies via Isolation Forest."""
+    from sklearn.ensemble import IsolationForest
+
+    features = ["edit_count", "unique_editors", "total_edit_size", "edit_velocity"]
+
+    if len(pdf) < 10:
+        print(f"  ⚠ Trop peu d'articles ({len(pdf)}) pour le ML")
+        pdf["is_emerging"] = False
+        pdf["anomaly_score"] = 0.0
+        return pdf
+
+    X = pdf[features].fillna(0)
+    model = IsolationForest(contamination=0.1, random_state=42)
+    predictions = model.fit_predict(X)
+    scores = model.score_samples(X)
+
+    pdf["is_emerging"] = (predictions == -1)
+    pdf["anomaly_score"] = scores.round(4)
+
+    n_emerging = int(pdf["is_emerging"].sum())
+    print(f"  → {n_emerging} événements émergents détectés par Isolation Forest")
+    return pdf
+
+
 def combine(date: datetime) -> None:
-    from datetime import timedelta
     date_str          = date.strftime("%Y%m%d")
     date_str_previous = (date - timedelta(days=1)).strftime("%Y%m%d")
 
@@ -76,6 +91,18 @@ def combine(date: datetime) -> None:
         )
     )
 
+    # edit_velocity = éditions par minute
+    df_edit_agg = df_edit_agg.withColumn(
+        "duration_seconds",
+        F.unix_timestamp("last_edit") - F.unix_timestamp("first_edit")
+    ).withColumn(
+        "edit_velocity",
+        F.when(
+            F.col("duration_seconds") > 0,
+            F.round(F.col("edit_count") / F.col("duration_seconds") * 60, 4)
+        ).otherwise(F.col("edit_count").cast("double"))
+    )
+
     # Normalisation du titre pageviews
     df_pageviews_norm = df_pageviews.withColumn(
         "title_norm", F.regexp_replace(F.col("article"), "_", " ")
@@ -93,6 +120,7 @@ def combine(date: datetime) -> None:
         "edit_count",
         "total_edit_size",
         "unique_editors",
+        "edit_velocity",
         "first_edit",
         "last_edit",
         F.coalesce(F.col("views"), F.lit(0)).alias("pageviews"),
@@ -109,7 +137,18 @@ def combine(date: datetime) -> None:
         )
     ).orderBy(F.col("trending_score").desc())
 
-    # Lead-Lag
+    # ─── ML : Isolation Forest ────────────────────────────────────────────────
+    print("Détection d'événements émergents (Isolation Forest)...")
+    pdf_trending = df_trending.toPandas()
+
+    # Fix timestamps nanosecondes → microsecondes
+    for col in ["first_edit", "last_edit"]:
+        if col in pdf_trending.columns:
+            pdf_trending[col] = pdf_trending[col].astype("datetime64[us]")
+
+    pdf_trending = detect_emerging(pdf_trending)
+
+    # ─── Lead-Lag ─────────────────────────────────────────────────────────────
     df_leadlag = df_joined.filter(
         (F.col("edit_count") > 1) & (F.col("pageviews") > 0)
     ).withColumn(
@@ -117,18 +156,24 @@ def combine(date: datetime) -> None:
         F.round(F.col("edit_count") / F.log(F.col("pageviews") + 2), 4)
     ).orderBy(F.col("edit_to_view_ratio").desc())
 
-    # Sauvegarde
-    trending_out = str(trending_dir / "trending.snappy.parquet")
-    leadlag_out  = str(leadlag_dir / "leadlag.snappy.parquet")
+    # ─── Sauvegarde ───────────────────────────────────────────────────────────
+    # Trending : écriture pandas (évite le conflit de types pandas↔Spark)
+    trending_out = trending_dir / "trending.snappy.parquet"
+    trending_out.mkdir(parents=True, exist_ok=True)
+    pdf_trending.to_parquet(str(trending_out / "part-00000.snappy.parquet"), index=False)
+    print(f"  → Trending saved ({len(pdf_trending)} articles)")
 
-    df_trending.write.mode("overwrite").parquet(trending_out)
+    # Lead-lag : écriture Spark
+    leadlag_out = str(leadlag_dir / "leadlag.snappy.parquet")
     df_leadlag.write.mode("overwrite").parquet(leadlag_out)
+    print(f"  → Lead-lag saved")
 
-    print(f"  → Trending articles saved to {trending_out}")
-    print(f"  → Lead-lag saved to {leadlag_out}")
-
-    print("\nTop 10 trending articles :")
-    df_trending.select("title", "edit_count", "unique_editors", "pageviews", "trending_score").show(10, truncate=50)
+    # Affichage top 10
+    print("\nTop 10 trending (avec détection émergence) :")
+    top10 = pdf_trending.nlargest(10, "trending_score")[
+        ["title", "edit_count", "unique_editors", "edit_velocity", "trending_score", "is_emerging"]
+    ]
+    print(top10.to_string(index=False))
 
     spark.stop()
 
