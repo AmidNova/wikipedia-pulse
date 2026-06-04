@@ -40,10 +40,12 @@ def get_spark():
 
 
 def combine(date: datetime) -> None:
-    date_str = date.strftime("%Y%m%d")
+    from datetime import timedelta
+    date_str          = date.strftime("%Y%m%d")
+    date_str_previous = (date - timedelta(days=1)).strftime("%Y%m%d")
 
     edits_path     = str(DATALAKE_ROOT / "formatted" / "wikimedia_stream" / "Edits" / date_str / "edits.snappy.parquet")
-    pageviews_path = str(DATALAKE_ROOT / "formatted" / "wikimedia_analytics" / "Pageviews" / date_str / "pageviews_*.snappy.parquet")
+    pageviews_path = str(DATALAKE_ROOT / "formatted" / "wikimedia_analytics" / "Pageviews" / date_str_previous / "pageviews_*.snappy.parquet")
     trending_dir   = DATALAKE_ROOT / "usage" / "wikipediaPulse" / "TrendingArticles" / date_str
     leadlag_dir    = DATALAKE_ROOT / "usage" / "wikipediaPulse" / "EditLeadLag" / date_str
 

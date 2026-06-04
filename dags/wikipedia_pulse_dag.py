@@ -23,12 +23,10 @@ from lib.edits_formatter import raw_to_formatted_edits
 from lib.pageviews_fetcher import pageviews_to_raw
 from lib.pageviews_formatter import raw_to_formatted_pageviews
 from lib.pulse_combiner import produce_pulse
+from lib.elastic_indexer import index_to_elastic
 
 
-# index_to_elastic : pas encore implémenté (cours Elasticsearch à venir)
-def index_to_elastic(**kwargs):
-    """Placeholder — sera implémenté après le cours Elasticsearch."""
-    print("TODO: index_to_elastic — en attente du cours Elasticsearch")
+
 
 # ok
 
