@@ -20,7 +20,7 @@ import requests
 
 DATALAKE_ROOT = Path("/opt/airflow/datalake")
 WIKIMEDIA_API = "https://wikimedia.org/api/rest_v1/metrics/pageviews"
-PROJECTS = ["en.wikipedia", "fr.wikipedia"]
+PROJECTS = ["en.wikipedia", "fr.wikipedia", "de.wikipedia", "es.wikipedia", "ru.wikipedia"]
 
 
 def fetch_top_pageviews(project: str, date: datetime) -> dict:

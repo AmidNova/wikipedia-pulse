@@ -19,7 +19,7 @@ from kafka import KafkaProducer
 STREAM_URL = "https://stream.wikimedia.org/v2/stream/recentchange"
 KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "localhost:9092")
 TOPIC = "wikipedia-edits"
-WATCHED_PROJECTS = {"en.wikipedia.org", "fr.wikipedia.org"}
+WATCHED_PROJECTS = {"en.wikipedia.org", "fr.wikipedia.org", "de.wikipedia.org", "es.wikipedia.org", "ru.wikipedia.org"}
 
 # Compteur global pour le log
 count = 0
