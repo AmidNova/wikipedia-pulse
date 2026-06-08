@@ -103,6 +103,28 @@ def combine(date: datetime) -> None:
         ).otherwise(F.col("edit_count").cast("double"))
     )
 
+    # ─── Signature linguistique ───────────────────────────────────────────────
+    # Quelle langue édite un article en PREMIER ? Combien de langues en parlent ?
+    from pyspark.sql.window import Window
+
+    w_first = Window.partitionBy("title").orderBy("first_edit")
+    df_first_lang = (
+        df_edit_agg
+        .withColumn("rn", F.row_number().over(w_first))
+        .filter(F.col("rn") == 1)
+        .select("title", F.col("project").alias("first_language"))
+    )
+
+    df_lang_count = (
+        df_edit_agg
+        .groupBy("title")
+        .agg(
+            F.countDistinct("project").alias("language_count"),
+            F.concat_ws(",", F.collect_list("project")).alias("languages_editing")
+        )
+        .join(df_first_lang, "title", how="left")
+    )
+
     # Normalisation du titre pageviews
     df_pageviews_norm = df_pageviews.withColumn(
         "title_norm", F.regexp_replace(F.col("article"), "_", " ")
@@ -125,7 +147,7 @@ def combine(date: datetime) -> None:
         "last_edit",
         F.coalesce(F.col("views"), F.lit(0)).alias("pageviews"),
         F.coalesce(F.col("rank"), F.lit(9999)).alias("pageview_rank"),
-    )
+    ).join(df_lang_count, "title", how="left")
 
     # Score trending
     df_trending = df_joined.withColumn(
@@ -184,3 +206,4 @@ def produce_pulse(**kwargs):
     print(f"=== produce_pulse | {target_date.strftime('%Y-%m-%d')} ===")
     combine(target_date)
     print("=== produce_pulse done ===")
+# NE PAS COPIER — sera intégré proprement
