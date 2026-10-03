@@ -12,12 +12,15 @@ Index Elasticsearch :
     wikipedia-leadlag
 """
 
+import hashlib
 import os
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 from elasticsearch import Elasticsearch, helpers
+
+from lib.common import target_date
 
 DATALAKE_ROOT = Path(os.environ.get("DATALAKE_ROOT", "/opt/airflow/datalake"))
 ES_HOST = os.environ.get("ES_HOST", "http://elasticsearch:9200")
@@ -35,19 +38,25 @@ def read_parquet_folder(folder: Path) -> pd.DataFrame:
     return pd.concat([pd.read_parquet(p) for p in parts], ignore_index=True)
 
 
+def doc_id(date_str: str, project: str, title: str) -> str:
+    """Identifiant stable d'un article pour un jour : un rerun écrase au lieu de dupliquer."""
+    return hashlib.sha1(f"{date_str}|{project}|{title}".encode("utf-8")).hexdigest()
+
+
 def df_to_actions(df: pd.DataFrame, index: str, date_str: str):
     """Génère les actions bulk Elasticsearch depuis un DataFrame."""
     for _, row in df.iterrows():
         doc = row.to_dict()
         # Convertir les types pandas non-sérialisables
         for k, v in doc.items():
-            if hasattr(v, 'item'):  # numpy types
-                doc[k] = v.item()
-            elif pd.isna(v) if not isinstance(v, (list, dict)) else False:
+            if not isinstance(v, (list, dict)) and pd.isna(v):
                 doc[k] = None
+            elif hasattr(v, 'item'):  # numpy types
+                doc[k] = v.item()
         doc["date"] = date_str
         yield {
             "_index": index,
+            "_id": doc_id(date_str, doc["edit_project"], doc["title"]),
             "_source": doc,
         }
 
@@ -68,7 +77,7 @@ def index_trending(es: Elasticsearch, date: datetime) -> int:
     success, errors = helpers.bulk(es, actions, raise_on_error=False)
     print(f"  → {success} docs indexés dans 'wikipedia-trending'")
     if errors:
-        print(f"  ⚠ {len(errors)} erreurs")
+        raise RuntimeError(f"{len(errors)} documents rejetés par Elasticsearch : {errors[:3]}")
     return success
 
 
@@ -88,32 +97,20 @@ def index_leadlag(es: Elasticsearch, date: datetime) -> int:
     success, errors = helpers.bulk(es, actions, raise_on_error=False)
     print(f"  → {success} docs indexés dans 'wikipedia-leadlag'")
     if errors:
-        print(f"  ⚠ {len(errors)} erreurs")
+        raise RuntimeError(f"{len(errors)} documents rejetés par Elasticsearch : {errors[:3]}")
     return success
 
 
 def index_to_elastic(**kwargs):
     """Point d'entrée Airflow."""
-    execution_date = kwargs["dag_run"].execution_date
-    target_date = execution_date.replace(tzinfo=timezone.utc)
-
-    print(f"=== index_to_elastic | {target_date.strftime('%Y-%m-%d')} ===")
+    date = target_date(kwargs)
+    print(f"=== index_to_elastic | {date.strftime('%Y-%m-%d')} ===")
 
     es = get_es_client()
-
     if not es.ping():
         raise ConnectionError(f"Impossible de joindre Elasticsearch sur {ES_HOST}")
-
     print(f"Connecté à Elasticsearch ({ES_HOST})")
 
-    try:
-        index_trending(es, target_date)
-    except FileNotFoundError as e:
-        print(f"  ⚠ TrendingArticles introuvable : {e}")
-
-    try:
-        index_leadlag(es, target_date)
-    except FileNotFoundError as e:
-        print(f"  ⚠ EditLeadLag introuvable : {e}")
-
+    index_trending(es, date)
+    index_leadlag(es, date)
     print("=== index_to_elastic done ===")

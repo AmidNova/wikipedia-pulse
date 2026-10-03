@@ -11,6 +11,8 @@ import time
 import requests
 from kafka import KafkaProducer
 
+USER_AGENT = "wikipedia-pulse/1.0 (https://github.com/AmidNova/wikipedia-pulse)"
+
 STREAM_URL = "https://stream.wikimedia.org/v2/stream/recentchange"
 KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "localhost:9092")
 TOPIC = "wikipedia-edits"
@@ -31,7 +33,7 @@ def shutdown(signum, frame):
 
 def consume(producer):
     global count, running
-    headers = {"User-Agent": "wikipedia-pulse/1.0 (bigdata-project)"}
+    headers = {"User-Agent": USER_AGENT}
 
     with requests.get(STREAM_URL, headers=headers, stream=True, timeout=60) as r:
         r.raise_for_status()
@@ -67,6 +69,7 @@ def consume(producer):
                 "length_old": event.get("length", {}).get("old", 0),
                 "length_new": event.get("length", {}).get("new", 0),
                 "comment":    event.get("comment", ""),
+                "rev_id":     event.get("revision", {}).get("new"),
             }
             producer.send(TOPIC, value=edit)
             count += 1

@@ -6,27 +6,44 @@ via Machine Learning (Isolation Forest).
 """
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 
-os.environ["JAVA_HOME"] = "/usr/lib/jvm/java-17-openjdk-amd64"
-import pyspark
-os.environ["SPARK_HOME"] = os.path.dirname(pyspark.__file__)
-
-from pyspark.sql import SparkSession
+from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
+
+from lib.common import target_date
+from lib.spark_session import get_spark
 
 DATALAKE_ROOT = Path(os.environ.get("DATALAKE_ROOT", "/opt/airflow/datalake"))
 
 
-def get_spark():
-    return (
-        SparkSession.builder
-        .appName("WikipediaPulse-Combination")
-        .master("local[*]")
-        .config("spark.driver.memory", "1g")
-        .config("spark.sql.shuffle.partitions", "4")
-        .getOrCreate()
+def join_edits_pageviews(df_edit_agg: DataFrame, df_pageviews: DataFrame) -> DataFrame:
+    """Left join éditions × pageviews sur (titre, langue).
+
+    Les éditions portent "fr.wikipedia.org", les pageviews "fr.wikipedia" :
+    on aligne avant de joindre pour ne jamais associer deux langues.
+    """
+    edits = df_edit_agg.withColumn("join_project", F.regexp_replace("project", r"\.org$", ""))
+    views = df_pageviews.select(
+        F.regexp_replace("article", "_", " ").alias("pv_title"),
+        F.col("project").alias("pageview_project"),
+        "views",
+        "rank",
+    )
+    joined = edits.join(
+        views,
+        (edits["title"] == views["pv_title"]) & (edits["join_project"] == views["pageview_project"]),
+        how="left",
+    )
+    passthrough = [c for c in df_edit_agg.columns if c not in ("title", "project")]
+    return joined.select(
+        "title",
+        F.col("project").alias("edit_project"),
+        "pageview_project",
+        *passthrough,
+        F.coalesce(F.col("views"), F.lit(0)).alias("pageviews"),
+        F.coalesce(F.col("rank"), F.lit(9999)).alias("pageview_rank"),
     )
 
 
@@ -56,19 +73,17 @@ def detect_emerging(pdf):
 
 
 def combine(date: datetime) -> None:
-    date_str          = date.strftime("%Y%m%d")
-    date_str_previous = (date - timedelta(days=1)).strftime("%Y%m%d")
+    date_str = date.strftime("%Y%m%d")
 
     edits_path     = str(DATALAKE_ROOT / "formatted" / "wikimedia_stream" / "Edits" / date_str / "edits.snappy.parquet")
-    pageviews_path = str(DATALAKE_ROOT / "formatted" / "wikimedia_analytics" / "Pageviews" / date_str_previous / "pageviews_*.snappy.parquet")
+    pageviews_path = str(DATALAKE_ROOT / "formatted" / "wikimedia_analytics" / "Pageviews" / date_str / "pageviews_*.snappy.parquet")
     trending_dir   = DATALAKE_ROOT / "usage" / "wikipediaPulse" / "TrendingArticles" / date_str
     leadlag_dir    = DATALAKE_ROOT / "usage" / "wikipediaPulse" / "EditLeadLag" / date_str
 
     trending_dir.mkdir(parents=True, exist_ok=True)
     leadlag_dir.mkdir(parents=True, exist_ok=True)
 
-    spark = get_spark()
-    spark.sparkContext.setLogLevel("ERROR")
+    spark = get_spark("WikipediaPulse-Combination")
 
     print(f"Reading edits from {edits_path}...")
     df_edits = spark.read.parquet(edits_path)
@@ -125,28 +140,13 @@ def combine(date: datetime) -> None:
         .join(df_first_lang, "title", how="left")
     )
 
-    # Normalisation du titre pageviews
-    df_pageviews_norm = df_pageviews.withColumn(
-        "title_norm", F.regexp_replace(F.col("article"), "_", " ")
-    )
-
-    # Join éditions × pageviews
-    df_joined = df_edit_agg.join(
-        df_pageviews_norm,
-        (df_edit_agg["title"] == df_pageviews_norm["title_norm"]),
-        how="left"
-    ).select(
-        df_edit_agg["title"],
-        df_edit_agg["project"].alias("edit_project"),
-        df_pageviews_norm["project"].alias("pageview_project"),
-        "edit_count",
-        "total_edit_size",
-        "unique_editors",
-        "edit_velocity",
-        "first_edit",
-        "last_edit",
-        F.coalesce(F.col("views"), F.lit(0)).alias("pageviews"),
-        F.coalesce(F.col("rank"), F.lit(9999)).alias("pageview_rank"),
+    # Join éditions × pageviews (même langue uniquement)
+    df_joined = join_edits_pageviews(
+        df_edit_agg.select(
+            "title", "project", "edit_count", "total_edit_size",
+            "unique_editors", "edit_velocity", "first_edit", "last_edit",
+        ),
+        df_pageviews,
     ).join(df_lang_count, "title", how="left")
 
     # Score trending
@@ -201,9 +201,7 @@ def combine(date: datetime) -> None:
 
 
 def produce_pulse(**kwargs):
-    execution_date = kwargs["dag_run"].execution_date
-    target_date = execution_date.replace(tzinfo=timezone.utc)
-    print(f"=== produce_pulse | {target_date.strftime('%Y-%m-%d')} ===")
-    combine(target_date)
+    date = target_date(kwargs)
+    print(f"=== produce_pulse | {date.strftime('%Y-%m-%d')} ===")
+    combine(date)
     print("=== produce_pulse done ===")
-# NE PAS COPIER — sera intégré proprement

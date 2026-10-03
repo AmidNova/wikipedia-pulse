@@ -12,15 +12,15 @@ Sortie :
 """
 
 import json
-import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 
 import requests
 
+from lib.common import PROJECTS, USER_AGENT, target_date
+
 DATALAKE_ROOT = Path("/opt/airflow/datalake")
 WIKIMEDIA_API = "https://wikimedia.org/api/rest_v1/metrics/pageviews"
-PROJECTS = ["en.wikipedia", "fr.wikipedia", "de.wikipedia", "es.wikipedia", "ru.wikipedia"]
 
 
 def fetch_top_pageviews(project: str, date: datetime) -> dict:
@@ -30,7 +30,7 @@ def fetch_top_pageviews(project: str, date: datetime) -> dict:
     day   = date.strftime("%d")
 
     url = f"{WIKIMEDIA_API}/top/{project}/all-access/{year}/{month}/{day}"
-    headers = {"User-Agent": "wikipedia-pulse/1.0 (bigdata-project)"}
+    headers = {"User-Agent": USER_AGENT}
 
     print(f"Fetching pageviews for {project} on {year}-{month}-{day}...")
     response = requests.get(url, headers=headers, timeout=30)
@@ -61,24 +61,23 @@ def save_to_raw(data: dict, project: str, date: datetime) -> Path:
 
 def pageviews_to_raw(**kwargs):
     """Point d'entrée Airflow.
-    On récupère les pageviews du jour précédent (J-1) car l'API
-    ne fournit pas encore les données du jour courant.
+
+    Le run planifié du jour D est lancé à D+1 00:00 : on récupère les pageviews
+    de D. L'API publie avec quelques heures de retard → les retries du DAG
+    prennent le relais tant que la donnée n'est pas disponible.
     """
-    # On accède à la date du dag_run, jamais date.today()
-    execution_date = kwargs["dag_run"].execution_date
-    target_date = execution_date - timedelta(days=1)
-    # On normalise en UTC
-    target_date = target_date.replace(tzinfo=timezone.utc)
+    date = target_date(kwargs)
+    print(f"=== pageviews_to_raw | target date : {date.strftime('%Y-%m-%d')} ===")
 
-    print(f"=== pageviews_to_raw | target date : {target_date.strftime('%Y-%m-%d')} ===")
-
+    failures = []
     for project in PROJECTS:
         try:
-            data = fetch_top_pageviews(project, target_date)
-            save_to_raw(data, project, target_date)
-        except requests.exceptions.HTTPError as e:
-            print(f"  ✗ HTTP error for {project}: {e}")
+            data = fetch_top_pageviews(project, date)
+            save_to_raw(data, project, date)
         except requests.exceptions.RequestException as e:
             print(f"  ✗ Request error for {project}: {e}")
+            failures.append(project)
 
+    if failures:
+        raise RuntimeError(f"Pageviews non récupérées pour : {', '.join(failures)}")
     print("=== pageviews_to_raw done ===")

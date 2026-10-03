@@ -25,10 +25,9 @@ from lib.pageviews_formatter import raw_to_formatted_pageviews
 from lib.pulse_combiner import produce_pulse
 from lib.elastic_indexer import index_to_elastic
 
-
-
-
-# ok
+# L'API pageviews publie J avec quelques heures de retard : on réessaie toutes les heures
+PAGEVIEWS_RETRIES = 8
+PAGEVIEWS_RETRY_DELAY = timedelta(hours=1)
 
 with DAG(
     "wikipedia_pulse",
@@ -56,7 +55,12 @@ with DAG(
     t2a = PythonOperator(task_id="raw_to_formatted_edits", python_callable=raw_to_formatted_edits)
 
     # Source 2 (batch API)
-    t1b = PythonOperator(task_id="pageviews_to_raw", python_callable=pageviews_to_raw)
+    t1b = PythonOperator(
+        task_id="pageviews_to_raw",
+        python_callable=pageviews_to_raw,
+        retries=PAGEVIEWS_RETRIES,
+        retry_delay=PAGEVIEWS_RETRY_DELAY,
+    )
     t2b = PythonOperator(task_id="raw_to_formatted_pageviews", python_callable=raw_to_formatted_pageviews)
 
     # Combine + Index

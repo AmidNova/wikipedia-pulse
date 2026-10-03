@@ -132,6 +132,10 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      # Topic + offsets du consumer persistés hors du conteneur
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - kafka-data:/var/lib/kafka/data
     healthcheck:
       test:
         [
@@ -141,6 +145,24 @@ services:
       interval: 10s
       timeout: 10s
       retries: 5
+    restart: unless-stopped
+
+  kafka-producer:
+    # Producer SSE → Kafka, tourne en continu (même image que Airflow : requests + kafka-python)
+    image: wikipedia-pulse-airflow:latest
+    container_name: airflow-kafka-producer
+    command: python /opt/airflow/kafka/producer.py
+    environment:
+      KAFKA_BOOTSTRAP: kafka:29092
+      PYTHONUNBUFFERED: "1"
+      CONNECTION_CHECK_MAX_COUNT: "0"
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}/kafka:/opt/airflow/kafka
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
     container_name: airflow-elasticsearch
@@ -158,6 +180,7 @@ services:
       interval: 10s
       timeout: 10s
       retries: 5
+    restart: unless-stopped
 
   kibana:
     image: docker.elastic.co/kibana/kibana:8.13.0
@@ -169,6 +192,8 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
+    restart: unless-stopped
+
   airflow-webserver:
     <<: *airflow-common
     command: webserver
@@ -345,3 +370,4 @@ services:
 volumes:
   postgres-db-volume:
   elastic-data:
+  kafka-data:

@@ -2,33 +2,25 @@
 pageviews_formatter.py
 
 Convertit les pageviews brutes JSON en parquet normalisé — via Spark.
+
+Lecture  : datalake/raw/wikimedia_analytics/Pageviews/{YYYYMMDD}/pageviews_{project}.json
+Écriture : datalake/formatted/wikimedia_analytics/Pageviews/{YYYYMMDD}/pageviews_{project}.snappy.parquet
 """
 
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 
-from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql.types import StructType, StructField, StringType, LongType
+from pyspark.sql.types import LongType, StringType, StructField, StructType
 
-os.environ["JAVA_HOME"] = "/usr/lib/jvm/java-17-openjdk-amd64"
-import pyspark
-os.environ["SPARK_HOME"] = os.path.dirname(pyspark.__file__)
+from lib.common import PROJECTS, target_date
+from lib.spark_session import get_spark
+
 DATALAKE_ROOT = Path(os.environ.get("DATALAKE_ROOT", "/opt/airflow/datalake"))
-PROJECTS = ["en_wikipedia", "fr_wikipedia"]
-
-
-def get_spark():
-    return (
-        SparkSession.builder
-        .appName("WikipediaPulse-PageviewsFormatter")
-        .master("local[*]")
-        .config("spark.driver.memory", "1g")
-        .config("spark.sql.shuffle.partitions", "4")
-        .getOrCreate()
-    )
+# Mêmes langues que le fetcher, au format des noms de fichiers (en_wikipedia)
+FORMATTER_PROJECTS = [p.replace(".", "_") for p in PROJECTS]
 
 
 def convert_pageviews(project: str, date: datetime, spark) -> Path:
@@ -41,7 +33,6 @@ def convert_pageviews(project: str, date: datetime, spark) -> Path:
     output_dir = (
         DATALAKE_ROOT / "formatted" / "wikimedia_analytics" / "Pageviews" / date_str
     )
-    output_dir.mkdir(parents=True, exist_ok=True)
     output_file = str(output_dir / f"pageviews_{project}.snappy.parquet")
 
     print(f"Reading {input_file}...")
@@ -67,25 +58,28 @@ def convert_pageviews(project: str, date: datetime, spark) -> Path:
         .select("date_utc", "project", "rank", "article", "views")
     )
 
+    output_dir.mkdir(parents=True, exist_ok=True)
     df.write.mode("overwrite").parquet(output_file)
     print(f"  → {df.count()} articles saved to {output_file}")
     return Path(output_file)
 
 
 def raw_to_formatted_pageviews(**kwargs):
-    execution_date = kwargs["dag_run"].execution_date
-    target_date = (execution_date - timedelta(days=1)).replace(tzinfo=timezone.utc)
+    date = target_date(kwargs)
+    print(f"=== raw_to_formatted_pageviews (Spark) | {date.strftime('%Y-%m-%d')} ===")
 
-    print(f"=== raw_to_formatted_pageviews (Spark) | {target_date.strftime('%Y-%m-%d')} ===")
+    spark = get_spark("WikipediaPulse-PageviewsFormatter")
+    failures = []
+    try:
+        for project in FORMATTER_PROJECTS:
+            try:
+                convert_pageviews(project, date, spark)
+            except Exception as e:
+                print(f"  ✗ Erreur pour {project}: {e}")
+                failures.append(project)
+    finally:
+        spark.stop()
 
-    spark = get_spark()
-    spark.sparkContext.setLogLevel("ERROR")
-
-    for project in PROJECTS:
-        try:
-            convert_pageviews(project, target_date, spark)
-        except Exception as e:
-            print(f"  ✗ Erreur pour {project}: {e}")
-
-    spark.stop()
+    if failures:
+        raise RuntimeError(f"Formatage pageviews échoué pour : {', '.join(failures)}")
     print("=== raw_to_formatted_pageviews done ===")

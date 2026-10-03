@@ -1,18 +1,11 @@
+"""Script manuel : vide le topic Kafka vers la couche raw (nécessite Kafka + producer)."""
 import sys
-import os
-from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, "/opt/airflow/dags")
 
-import lib.edits_consumer as ec
-ec.DATALAKE_ROOT = Path("/opt/airflow/datalake")
-
-from lib.edits_consumer import consume_from_kafka, save_to_raw
+from lib.edits_consumer import edits_stream_to_raw
 
 if __name__ == "__main__":
-    date = datetime.now(timezone.utc)
-    edits = consume_from_kafka(max_messages=200)
-    if edits:
-        save_to_raw(edits, date)
+    edits_stream_to_raw(data_interval_start=datetime.now(timezone.utc) - timedelta(days=1))
     print("\nTest OK")
