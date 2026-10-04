@@ -34,3 +34,11 @@ def test_actions_turn_nan_into_null():
     action = next(ei.df_to_actions(df, "wikipedia-trending", "20261001"))
 
     assert action["_source"]["score"] is None
+
+
+def test_actions_fall_back_to_project_column_for_hourly_leadlag():
+    df = pd.DataFrame([{"title": "Paris", "project": "fr.wikipedia", "best_lag_hours": 3}])
+
+    action = next(ei.df_to_actions(df, "wikipedia-leadlag-hourly", "20261001"))
+
+    assert action["_id"] == ei.doc_id("20261001", "fr.wikipedia", "Paris")

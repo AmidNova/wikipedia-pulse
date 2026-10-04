@@ -5,9 +5,11 @@ Pipeline qui croise les éditions Wikipedia (streaming via Kafka) et les pagevie
 (batch quotidien) pour détecter les événements mondiaux émergents.
 
 Architecture :
-    edits_stream_to_raw    --> raw_to_formatted_edits     --+
-                                                            +--> produce_pulse --> index_to_elastic
-    pageviews_to_raw       --> raw_to_formatted_pageviews --+
+    edits_stream_to_raw    --> raw_to_formatted_edits     --+--> produce_pulse --------------------+
+    pageviews_to_raw       --> raw_to_formatted_pageviews --+                                      +--> index_to_elastic
+    raw_to_formatted_edits --> hourly_pageviews_to_raw --> raw_to_formatted_hourly_pageviews       |
+                                                       --> produce_leadlag (jour J-1) --> index_leadlag_hourly
+    (produce_pulse --> produce_leadlag : une seule session Spark à la fois)
 
 Les fonctions métier sont importées depuis dags/lib/.
 """
@@ -23,7 +25,10 @@ from lib.edits_formatter import raw_to_formatted_edits
 from lib.pageviews_fetcher import pageviews_to_raw
 from lib.pageviews_formatter import raw_to_formatted_pageviews
 from lib.pulse_combiner import produce_pulse
-from lib.elastic_indexer import index_to_elastic
+from lib.hourly_pageviews import hourly_pageviews_to_raw
+from lib.hourly_pageviews_formatter import raw_to_formatted_hourly_pageviews
+from lib.leadlag import produce_leadlag
+from lib.elastic_indexer import index_leadlag_hourly_to_elastic, index_to_elastic
 
 # L'API pageviews publie J avec quelques heures de retard : on réessaie toutes les heures
 PAGEVIEWS_RETRIES = 8
@@ -63,6 +68,17 @@ with DAG(
     )
     t2b = PythonOperator(task_id="raw_to_formatted_pageviews", python_callable=raw_to_formatted_pageviews)
 
+    # Source 3 (dumps horaires) : la dernière heure de J est publiée vers J+1 02:00
+    t1c = PythonOperator(
+        task_id="hourly_pageviews_to_raw",
+        python_callable=hourly_pageviews_to_raw,
+        retries=PAGEVIEWS_RETRIES,
+        retry_delay=PAGEVIEWS_RETRY_DELAY,
+    )
+    t2c = PythonOperator(task_id="raw_to_formatted_hourly_pageviews", python_callable=raw_to_formatted_hourly_pageviews)
+    t3c = PythonOperator(task_id="produce_leadlag", python_callable=produce_leadlag)
+    t4c = PythonOperator(task_id="index_leadlag_hourly", python_callable=index_leadlag_hourly_to_elastic)
+
     # Combine + Index
     t3 = PythonOperator(task_id="produce_pulse", python_callable=produce_pulse)
     t4 = PythonOperator(task_id="index_to_elastic", python_callable=index_to_elastic)
@@ -71,3 +87,6 @@ with DAG(
     t1a >> t2a >> t3
     t1b >> t2b >> t3
     t3 >> t4
+    t2a >> t1c >> t2c >> t3c >> t4c
+    # Une seule session Spark à la fois sur le worker (driver 1g chacune)
+    t3 >> t3c

@@ -14,7 +14,7 @@ Index Elasticsearch :
 
 import hashlib
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -56,7 +56,7 @@ def df_to_actions(df: pd.DataFrame, index: str, date_str: str):
         doc["date"] = date_str
         yield {
             "_index": index,
-            "_id": doc_id(date_str, doc["edit_project"], doc["title"]),
+            "_id": doc_id(date_str, doc.get("edit_project") or doc["project"], doc["title"]),
             "_source": doc,
         }
 
@@ -101,6 +101,26 @@ def index_leadlag(es: Elasticsearch, date: datetime) -> int:
     return success
 
 
+def index_leadlag_hourly(es: Elasticsearch, event_day: datetime) -> int:
+    """Indexe le lead-lag horaire du jour d'événement (J-1 du run)."""
+    date_str = event_day.strftime("%Y%m%d")
+    folder = (
+        DATALAKE_ROOT / "usage" / "wikipediaPulse" / "EditLeadLagHourly"
+        / date_str / "leadlag_hourly.snappy.parquet"
+    )
+
+    print(f"Reading hourly lead-lag from {folder}...")
+    df = read_parquet_folder(folder)
+    print(f"  → {len(df)} articles lead-lag horaire à indexer")
+
+    actions = list(df_to_actions(df, "wikipedia-leadlag-hourly", date_str))
+    success, errors = helpers.bulk(es, actions, raise_on_error=False)
+    print(f"  → {success} docs indexés dans 'wikipedia-leadlag-hourly'")
+    if errors:
+        raise RuntimeError(f"{len(errors)} documents rejetés par Elasticsearch : {errors[:3]}")
+    return success
+
+
 def index_to_elastic(**kwargs):
     """Point d'entrée Airflow."""
     date = target_date(kwargs)
@@ -114,3 +134,17 @@ def index_to_elastic(**kwargs):
     index_trending(es, date)
     index_leadlag(es, date)
     print("=== index_to_elastic done ===")
+
+
+def index_leadlag_hourly_to_elastic(**kwargs):
+    """Point d'entrée Airflow — tâche séparée : la branche horaire attend les dumps
+    (publiés vers J+1 02:00) et ne doit pas retarder l'indexation principale."""
+    event_day = target_date(kwargs) - timedelta(days=1)
+    print(f"=== index_leadlag_hourly_to_elastic | {event_day:%Y-%m-%d} ===")
+
+    es = get_es_client()
+    if not es.ping():
+        raise ConnectionError(f"Impossible de joindre Elasticsearch sur {ES_HOST}")
+
+    index_leadlag_hourly(es, event_day)
+    print("=== index_leadlag_hourly_to_elastic done ===")
