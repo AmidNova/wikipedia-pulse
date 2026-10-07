@@ -176,8 +176,11 @@ fausses (`dags/lib/quality.py`) :
 ## Tests
 
 ```bash
-docker exec airflow-airflow-worker-1 python -m pytest /opt/airflow/test/unit -q
+docker exec airflow-airflow-scheduler-1 python -m pytest /opt/airflow/test/unit -q
 ```
+
+`test_dag.py` vérifie l'intégrité du DAG (dépendances, `trigger_rule`, sémantique des dates) ;
+il est ignoré là où Airflow n'est pas installé.
 
 La CI GitHub Actions (`.github/workflows/ci.yml`) lance les mêmes tests à chaque push, avec les
 dépendances épinglées de `requirements.txt` (aussi installées dans l'image).
@@ -187,7 +190,7 @@ dépendances épinglées de `requirements.txt` (aussi installées dans l'image).
 | Outil          | Rôle                                          |
 | -------------- | --------------------------------------------- |
 | Docker Compose | Orchestration de tous les services            |
-| Apache Airflow | Orchestration du pipeline (DAGs)              |
+| Apache Airflow 3.3 | Orchestration (LocalExecutor : tâches dans le scheduler) |
 | PostgreSQL     | Base de métadonnées Airflow                   |
 | Python         | Ingestion + transformations (pandas, pyarrow) |
 | Elasticsearch  | Indexation des résultats                      |
@@ -213,7 +216,7 @@ ont un sous-champ `.keyword` pour les agrégations.
 
 Accès :
 
-- Airflow : http://localhost:8080 (admin / admin)
+- Airflow : http://localhost:8080 (airflow / airflow, à changer via `_AIRFLOW_WWW_USER_*`)
 - Kibana : http://localhost:5601
 - Elasticsearch : http://localhost:9200
 

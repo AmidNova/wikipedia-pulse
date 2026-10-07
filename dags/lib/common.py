@@ -18,6 +18,10 @@ def target_date(context) -> datetime:
 
     Run planifié @daily du jour D (lancé à D+1 00:00) → D.
     Run manuel déclenché le jour D → D-1 (dernier intervalle complet).
+    Airflow 3 permet un run manuel sans date logique : il n'a pas d'intervalle,
+    on refuse plutôt que de deviner le jour.
     """
-    start = context["data_interval_start"]
+    start = context.get("data_interval_start")
+    if start is None:
+        raise ValueError("Run sans date logique : déclencher le DAG avec une date (logical_date)")
     return datetime(start.year, start.month, start.day, tzinfo=timezone.utc)

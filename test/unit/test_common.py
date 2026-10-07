@@ -21,3 +21,10 @@ def test_user_agent_carries_contact_info():
 
 def test_five_languages_are_tracked():
     assert PROJECTS == ["en.wikipedia", "fr.wikipedia", "de.wikipedia", "es.wikipedia", "ru.wikipedia"]
+
+
+def test_run_without_logical_date_is_refused():
+    import pytest
+
+    with pytest.raises(ValueError, match="date logique"):
+        target_date({"data_interval_start": None})

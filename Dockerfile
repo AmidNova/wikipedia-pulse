@@ -1,4 +1,4 @@
-FROM apache/airflow:2.9.2
+FROM apache/airflow:3.3.2-python3.12
 
 USER root
 
@@ -14,4 +14,6 @@ USER airflow
 
 # Dépendances épinglées du pipeline + pytest (tests lancés dans le conteneur)
 COPY requirements.txt requirements-dev.txt /tmp/
-RUN pip install --no-cache-dir -r /tmp/requirements-dev.txt
+# Le provider Elasticsearch d'Airflow (inutilisé) impose le client 9, incompatible avec le serveur 8.13
+RUN pip uninstall -y apache-airflow-providers-elasticsearch && \
+    pip install --no-cache-dir -r /tmp/requirements-dev.txt

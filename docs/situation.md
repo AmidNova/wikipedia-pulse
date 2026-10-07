@@ -25,9 +25,8 @@ Choix EN + FR uniquement (volume gérable, matching propre). Les pageviews sont 
 | Outil | Rôle |
 |-------|------|
 | Docker Compose | Lance toute l'infrastructure |
-| Airflow 2.9.2 (CeleryExecutor) | Orchestre le pipeline (DAGs) |
+| Airflow 3.3.2 (LocalExecutor) | Orchestre le pipeline (DAGs) |
 | PostgreSQL | État interne d'Airflow |
-| Redis | File de tâches Airflow |
 | Spark 4.1.1 (PySpark) | Formatting + combination |
 | Kafka 3.7.0 (KRaft) | Tampon temps réel du flux d'éditions |
 | Elasticsearch | Indexation des résultats (à venir) |

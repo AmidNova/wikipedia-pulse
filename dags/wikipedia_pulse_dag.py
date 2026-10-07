@@ -18,10 +18,11 @@ vers J+1 02:00) : le top 1000 de l'API ne couvre que ~2 % des articles édités.
 Les fonctions métier sont importées depuis dags/lib/.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-from airflow import DAG
-from airflow.operators.python import PythonOperator
+from airflow.providers.standard.operators.python import PythonOperator
+from airflow.sdk import DAG
+from airflow.timetables.interval import CronDataIntervalTimetable
 
 # Import des vraies fonctions métier depuis lib/
 from lib.edits_consumer import edits_stream_to_raw
@@ -50,8 +51,11 @@ with DAG(
         "retry_delay": timedelta(minutes=5),
     },
     description="Pipeline Wikipedia Pulse : edits streaming + pageviews batch",
-    schedule_interval="@daily",
-    start_date=datetime(2026, 1, 1),
+    # Airflow 3 : "@daily" seul donnerait un CronTriggerTimetable, sans intervalle
+    # (data_interval_start = heure de déclenchement = D+1) → tout le pipeline décalé d'un jour.
+    # On garde explicitement l'intervalle [D, D+1) des runs Airflow 2.
+    schedule=CronDataIntervalTimetable("@daily", timezone="UTC"),
+    start_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
     catchup=False,
     tags=["bigdata", "wikipedia"],
 ) as dag:
