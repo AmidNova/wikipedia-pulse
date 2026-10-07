@@ -178,6 +178,17 @@ Les dumps sont nommés d'après la **fin** de l'heure : `pageviews-20261002-1200
 docker compose up -d
 ```
 
+Le service `kibana-setup` importe le dashboard **Wikipedia Pulse** (`kibana/wikipedia-pulse.ndjson`)
+dès que Kibana est prêt. Pour le modifier : éditer `kibana/build_dashboard.py`, puis
+
+```bash
+python kibana/build_dashboard.py && docker compose up kibana-setup
+```
+
+Les mappings Elasticsearch viennent du template d'index `wikipedia-pulse` (motif `wikipedia-*`),
+posé par l'indexer avant chaque écriture : `date` est un vrai champ date (`yyyyMMdd`), les textes
+ont un sous-champ `.keyword` pour les agrégations.
+
 Accès :
 
 - Airflow : http://localhost:8080 (admin / admin)

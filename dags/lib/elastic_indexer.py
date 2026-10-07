@@ -3,15 +3,14 @@ elastic_indexer.py
 
 Indexe la couche usage dans Elasticsearch.
 
-Lecture :
-    usage/wikipediaPulse/TrendingArticles/{YYYYMMDD}/trending.snappy.parquet
-    usage/wikipediaPulse/EditLeadLag/{YYYYMMDD}/leadlag.snappy.parquet
-    usage/wikipediaPulse/CrossLanguageEvents/{YYYYMMDD}/crosslang.snappy.parquet
+Lecture → index :
+    usage/wikipediaPulse/TrendingArticles/{YYYYMMDD}/trending.snappy.parquet          → wikipedia-trending
+    usage/wikipediaPulse/EditLeadLag/{YYYYMMDD}/leadlag.snappy.parquet                → wikipedia-leadlag
+    usage/wikipediaPulse/CrossLanguageEvents/{YYYYMMDD}/crosslang.snappy.parquet      → wikipedia-crosslang
+    usage/wikipediaPulse/EditLeadLagHourly/{YYYYMMDD}/leadlag_hourly.snappy.parquet   → wikipedia-leadlag-hourly
 
-Index Elasticsearch :
-    wikipedia-trending
-    wikipedia-leadlag
-    wikipedia-crosslang
+Les mappings viennent du template "wikipedia-pulse" (posé avant chaque indexation) :
+`date` est un vrai champ date, les textes gardent un sous-champ `.keyword`.
 """
 
 import hashlib
@@ -27,9 +26,54 @@ from lib.common import target_date
 DATALAKE_ROOT = Path(os.environ.get("DATALAKE_ROOT", "/opt/airflow/datalake"))
 ES_HOST = os.environ.get("ES_HOST", "http://elasticsearch:9200")
 
+# index → (table usage, dossier parquet)
+TABLES = {
+    "wikipedia-trending": ("TrendingArticles", "trending.snappy.parquet"),
+    "wikipedia-leadlag": ("EditLeadLag", "leadlag.snappy.parquet"),
+    "wikipedia-crosslang": ("CrossLanguageEvents", "crosslang.snappy.parquet"),
+    "wikipedia-leadlag-hourly": ("EditLeadLagHourly", "leadlag_hourly.snappy.parquet"),
+}
+
+TEMPLATE_NAME = "wikipedia-pulse"
+INDEX_TEMPLATE = {
+    "index_patterns": ["wikipedia-*"],
+    "priority": 100,
+    "template": {
+        # un seul nœud : pas de réplique, sinon les index restent "yellow"
+        "settings": {"number_of_replicas": 0},
+        "mappings": {
+            "dynamic_templates": [{
+                "strings": {
+                    "match_mapping_type": "string",
+                    "mapping": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 256}}},
+                },
+            }],
+            "properties": {
+                "date": {"type": "date", "format": "yyyyMMdd"},
+                "first_edit": {"type": "date"},
+                "last_edit": {"type": "date"},
+                "edit_peak_utc": {"type": "date"},
+                "view_peak_utc": {"type": "date"},
+                "wikidata_id": {"type": "keyword"},
+                "is_emerging": {"type": "boolean"},
+            },
+        },
+    },
+}
+
 
 def get_es_client() -> Elasticsearch:
     return Elasticsearch(ES_HOST)
+
+
+def connect() -> Elasticsearch:
+    """Client joignable, avec le template d'index à jour (idempotent)."""
+    es = get_es_client()
+    if not es.ping():
+        raise ConnectionError(f"Impossible de joindre Elasticsearch sur {ES_HOST}")
+    es.indices.put_index_template(name=TEMPLATE_NAME, **INDEX_TEMPLATE)
+    print(f"Connecté à Elasticsearch ({ES_HOST}), template '{TEMPLATE_NAME}' à jour")
+    return es
 
 
 def read_parquet_folder(folder: Path) -> pd.DataFrame:
@@ -67,84 +111,23 @@ def df_to_actions(df: pd.DataFrame, index: str, date_str: str):
         }
 
 
+def index_table(es: Elasticsearch, index: str, date: datetime) -> int:
+    """Indexe la table usage d'un jour dans son index ; échoue si un document est rejeté."""
+    date_str = date.strftime("%Y%m%d")
+    table, filename = TABLES[index]
+    folder = DATALAKE_ROOT / "usage" / "wikipediaPulse" / table / date_str / filename
+
+    print(f"Reading {table} from {folder}...")
+    df = read_parquet_folder(folder)
+    success, errors = helpers.bulk(es, df_to_actions(df, index, date_str), raise_on_error=False)
+    print(f"  → {success}/{len(df)} docs indexés dans '{index}'")
+    if errors:
+        raise RuntimeError(f"{len(errors)} documents rejetés par Elasticsearch : {errors[:3]}")
+    return success
+
+
 def index_trending(es: Elasticsearch, date: datetime) -> int:
-    """Indexe les articles trending."""
-    date_str = date.strftime("%Y%m%d")
-    folder = (
-        DATALAKE_ROOT / "usage" / "wikipediaPulse" / "TrendingArticles"
-        / date_str / "trending.snappy.parquet"
-    )
-
-    print(f"Reading trending from {folder}...")
-    df = read_parquet_folder(folder)
-    print(f"  → {len(df)} articles trending à indexer")
-
-    actions = list(df_to_actions(df, "wikipedia-trending", date_str))
-    success, errors = helpers.bulk(es, actions, raise_on_error=False)
-    print(f"  → {success} docs indexés dans 'wikipedia-trending'")
-    if errors:
-        raise RuntimeError(f"{len(errors)} documents rejetés par Elasticsearch : {errors[:3]}")
-    return success
-
-
-def index_leadlag(es: Elasticsearch, date: datetime) -> int:
-    """Indexe le lead-lag."""
-    date_str = date.strftime("%Y%m%d")
-    folder = (
-        DATALAKE_ROOT / "usage" / "wikipediaPulse" / "EditLeadLag"
-        / date_str / "leadlag.snappy.parquet"
-    )
-
-    print(f"Reading leadlag from {folder}...")
-    df = read_parquet_folder(folder)
-    print(f"  → {len(df)} entrées lead-lag à indexer")
-
-    actions = list(df_to_actions(df, "wikipedia-leadlag", date_str))
-    success, errors = helpers.bulk(es, actions, raise_on_error=False)
-    print(f"  → {success} docs indexés dans 'wikipedia-leadlag'")
-    if errors:
-        raise RuntimeError(f"{len(errors)} documents rejetés par Elasticsearch : {errors[:3]}")
-    return success
-
-
-def index_crosslang(es: Elasticsearch, date: datetime) -> int:
-    """Indexe les événements multilingues (une entité Wikidata éditée dans ≥ 2 langues)."""
-    date_str = date.strftime("%Y%m%d")
-    folder = (
-        DATALAKE_ROOT / "usage" / "wikipediaPulse" / "CrossLanguageEvents"
-        / date_str / "crosslang.snappy.parquet"
-    )
-
-    print(f"Reading cross-language events from {folder}...")
-    df = read_parquet_folder(folder)
-    print(f"  → {len(df)} événements multilingues à indexer")
-
-    actions = list(df_to_actions(df, "wikipedia-crosslang", date_str))
-    success, errors = helpers.bulk(es, actions, raise_on_error=False)
-    print(f"  → {success} docs indexés dans 'wikipedia-crosslang'")
-    if errors:
-        raise RuntimeError(f"{len(errors)} documents rejetés par Elasticsearch : {errors[:3]}")
-    return success
-
-
-def index_leadlag_hourly(es: Elasticsearch, event_day: datetime) -> int:
-    """Indexe le lead-lag horaire du jour d'événement (J-1 du run)."""
-    date_str = event_day.strftime("%Y%m%d")
-    folder = (
-        DATALAKE_ROOT / "usage" / "wikipediaPulse" / "EditLeadLagHourly"
-        / date_str / "leadlag_hourly.snappy.parquet"
-    )
-
-    print(f"Reading hourly lead-lag from {folder}...")
-    df = read_parquet_folder(folder)
-    print(f"  → {len(df)} articles lead-lag horaire à indexer")
-
-    actions = list(df_to_actions(df, "wikipedia-leadlag-hourly", date_str))
-    success, errors = helpers.bulk(es, actions, raise_on_error=False)
-    print(f"  → {success} docs indexés dans 'wikipedia-leadlag-hourly'")
-    if errors:
-        raise RuntimeError(f"{len(errors)} documents rejetés par Elasticsearch : {errors[:3]}")
-    return success
+    return index_table(es, "wikipedia-trending", date)
 
 
 def index_to_elastic(**kwargs):
@@ -152,14 +135,9 @@ def index_to_elastic(**kwargs):
     date = target_date(kwargs)
     print(f"=== index_to_elastic | {date.strftime('%Y-%m-%d')} ===")
 
-    es = get_es_client()
-    if not es.ping():
-        raise ConnectionError(f"Impossible de joindre Elasticsearch sur {ES_HOST}")
-    print(f"Connecté à Elasticsearch ({ES_HOST})")
-
-    index_trending(es, date)
-    index_leadlag(es, date)
-    index_crosslang(es, date)
+    es = connect()
+    for index in ("wikipedia-trending", "wikipedia-leadlag", "wikipedia-crosslang"):
+        index_table(es, index, date)
     print("=== index_to_elastic done ===")
 
 
@@ -169,9 +147,5 @@ def index_leadlag_hourly_to_elastic(**kwargs):
     event_day = target_date(kwargs) - timedelta(days=1)
     print(f"=== index_leadlag_hourly_to_elastic | {event_day:%Y-%m-%d} ===")
 
-    es = get_es_client()
-    if not es.ping():
-        raise ConnectionError(f"Impossible de joindre Elasticsearch sur {ES_HOST}")
-
-    index_leadlag_hourly(es, event_day)
+    index_table(connect(), "wikipedia-leadlag-hourly", event_day)
     print("=== index_leadlag_hourly_to_elastic done ===")

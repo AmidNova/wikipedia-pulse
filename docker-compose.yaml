@@ -192,7 +192,31 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:5601/api/status | grep -q '\"level\":\"available\"'"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
     restart: unless-stopped
+
+  # Importe le dashboard versionné (kibana/wikipedia-pulse.ndjson) ; ids fixes → réimport = écrasement
+  kibana-setup:
+    image: docker.elastic.co/kibana/kibana:8.13.0  # déjà présente, contient curl
+    container_name: airflow-kibana-setup
+    depends_on:
+      kibana:
+        condition: service_healthy
+    volumes:
+      - ./kibana:/kibana:ro
+    # l'API répond 200 même si des objets sont rejetés : on exige "success":true
+    entrypoint: ["bash", "-c"]
+    command:
+      - >
+        curl -sS -X POST "http://kibana:5601/api/saved_objects/_import?overwrite=true"
+        -H "kbn-xsrf: true" --form file=@/kibana/wikipedia-pulse.ndjson
+        | tee /dev/stderr | grep -q '"success":true'
+    restart: "no"
 
   airflow-webserver:
     <<: *airflow-common

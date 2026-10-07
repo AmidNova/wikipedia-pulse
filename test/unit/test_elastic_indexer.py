@@ -50,3 +50,40 @@ def test_crosslang_events_are_keyed_by_wikidata_entity():
     action = next(ei.df_to_actions(df, "wikipedia-crosslang", "20261001"))
 
     assert action["_id"] == ei.doc_id("20261001", "wikidata", "Q243")
+
+
+class FakeIndices:
+    def __init__(self):
+        self.templates = {}
+
+    def put_index_template(self, name, **body):
+        self.templates[name] = body
+
+
+class FakeES:
+    def __init__(self, up=True):
+        self.up, self.indices = up, FakeIndices()
+
+    def ping(self):
+        return self.up
+
+
+def test_connect_installs_the_index_template(monkeypatch):
+    es = FakeES()
+    monkeypatch.setattr(ei, "get_es_client", lambda: es)
+
+    assert ei.connect() is es
+    template = es.indices.templates[ei.TEMPLATE_NAME]
+    assert template["index_patterns"] == ["wikipedia-*"]
+    assert template["template"]["mappings"]["properties"]["date"] == {"type": "date", "format": "yyyyMMdd"}
+
+
+def test_connect_fails_when_elasticsearch_is_down(monkeypatch):
+    monkeypatch.setattr(ei, "get_es_client", lambda: FakeES(up=False))
+
+    with pytest.raises(ConnectionError):
+        ei.connect()
+
+
+def test_every_index_matches_the_template_pattern():
+    assert all(index.startswith("wikipedia-") for index in ei.TABLES)
