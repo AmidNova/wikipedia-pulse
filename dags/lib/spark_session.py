@@ -7,7 +7,8 @@ Création de la SparkSession locale, commune à tous les jobs Spark du pipeline.
 import os
 from pathlib import Path
 
-os.environ.setdefault("JAVA_HOME", "/usr/lib/jvm/java-17-openjdk-amd64")
+# Lien Debian vers le JDK de l'architecture (amd64 ou arm64)
+os.environ.setdefault("JAVA_HOME", "/usr/lib/jvm/default-java")
 import pyspark  # noqa: E402
 
 os.environ["SPARK_HOME"] = os.path.dirname(pyspark.__file__)

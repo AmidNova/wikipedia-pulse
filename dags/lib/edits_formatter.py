@@ -15,6 +15,7 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
 from lib.common import target_date
+from lib.quality import check_edits, edits_metrics
 from lib.spark_session import get_spark
 
 DATALAKE_ROOT = Path(os.environ.get("DATALAKE_ROOT", "/opt/airflow/datalake"))
@@ -59,10 +60,14 @@ def convert_edits(date: datetime, spark) -> Path:
     output_file = str(output_dir / "edits.snappy.parquet")
 
     print(f"Reading {input_file}...")
-    df = normalize_edits(spark.read.json(str(input_file)))
+    df = normalize_edits(spark.read.json(str(input_file))).cache()
+
+    metrics = edits_metrics(df, date)
+    print(f"  → {metrics['total']} edits, {metrics['in_day_share']:.2%} datées du jour, {metrics['per_project']}")
+    check_edits(metrics)
 
     df.write.mode("overwrite").parquet(output_file)
-    print(f"  → {df.count()} edits saved to {output_file}")
+    print(f"  → saved to {output_file}")
     return Path(output_file)
 
 

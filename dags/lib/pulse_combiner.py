@@ -27,6 +27,7 @@ from pyspark.sql import functions as F
 from lib.common import target_date
 from lib.emergence import flag_emerging, load_history, observed_days
 from lib.hourly_pageviews import TOTAL_TITLE
+from lib.quality import check_pulse
 from lib.spark_session import get_spark
 
 DATALAKE_ROOT = Path(os.environ.get("DATALAKE_ROOT", "/opt/airflow/datalake"))
@@ -212,6 +213,7 @@ def combine(date: datetime) -> None:
         history = load_history(spark, days, inputs["edits"])
         pdf = flag_emerging(pdf.assign(project=pdf["edit_project"]), history, days).drop(columns="project")
         pdf = add_language_signature(pdf).sort_values("trending_score", ascending=False)
+        check_pulse(pdf)  # avant toute écriture : des données fausses ne quittent pas la tâche
         events = cross_language_events(pdf)
 
         df_leadlag = (

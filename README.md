@@ -161,6 +161,27 @@ Les dumps sont nommés d'après la **fin** de l'heure : `pageviews-20261002-1200
 > Avec peu d'éditions, la corrélation d'un article isolé est bruitée : interpréter les
 > distributions (par langue, par jour) plutôt que chaque article.
 
+## Contrôles qualité
+
+Chaque tâche vérifie sa sortie et échoue **avant** d'écrire si les données sont manifestement
+fausses (`dags/lib/quality.py`) :
+
+| Couche              | Contrôle                                                   | Panne visée                          |
+| ------------------- | ---------------------------------------------------------- | ------------------------------------ |
+| Edits (formatted)   | ≥ 1 000 éditions, 5 langues, ≥ 99 % datées du jour         | Producer arrêté, dossiers décalés    |
+| TrendingArticles    | ≥ 80 % d'articles avec vues dans chaque langue             | Jointure des vues cassée (top 1000)  |
+| TrendingArticles    | (langue, titre) unique ; ≤ 5 % d'émergents                 | Doublons de jointure, seuil emballé  |
+| Wikidata            | ≥ 50 % d'articles avec QID                                 | Réponse API dégradée                 |
+
+## Tests
+
+```bash
+docker exec airflow-airflow-worker-1 python -m pytest /opt/airflow/test/unit -q
+```
+
+La CI GitHub Actions (`.github/workflows/ci.yml`) lance les mêmes tests à chaque push, avec les
+dépendances épinglées de `requirements.txt` (aussi installées dans l'image).
+
 ## Stack technique
 
 | Outil          | Rôle                                          |
@@ -175,6 +196,7 @@ Les dumps sont nommés d'après la **fin** de l'heure : `pageviews-20261002-1200
 ## Lancement
 
 ```bash
+cp .env.example .env   # puis renseigner FERNET_KEY (commande dans le fichier)
 docker compose up -d
 ```
 
