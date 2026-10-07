@@ -6,10 +6,12 @@ Indexe la couche usage dans Elasticsearch.
 Lecture :
     usage/wikipediaPulse/TrendingArticles/{YYYYMMDD}/trending.snappy.parquet
     usage/wikipediaPulse/EditLeadLag/{YYYYMMDD}/leadlag.snappy.parquet
+    usage/wikipediaPulse/CrossLanguageEvents/{YYYYMMDD}/crosslang.snappy.parquet
 
 Index Elasticsearch :
     wikipedia-trending
     wikipedia-leadlag
+    wikipedia-crosslang
 """
 
 import hashlib
@@ -54,9 +56,13 @@ def df_to_actions(df: pd.DataFrame, index: str, date_str: str):
             elif hasattr(v, 'item'):  # numpy types
                 doc[k] = v.item()
         doc["date"] = date_str
+        if "wikidata_id" in doc and "title" not in doc:  # événement multilingue : une entité par jour
+            key = ("wikidata", doc["wikidata_id"])
+        else:
+            key = (doc.get("edit_project") or doc["project"], doc["title"])
         yield {
             "_index": index,
-            "_id": doc_id(date_str, doc.get("edit_project") or doc["project"], doc["title"]),
+            "_id": doc_id(date_str, *key),
             "_source": doc,
         }
 
@@ -101,6 +107,26 @@ def index_leadlag(es: Elasticsearch, date: datetime) -> int:
     return success
 
 
+def index_crosslang(es: Elasticsearch, date: datetime) -> int:
+    """Indexe les événements multilingues (une entité Wikidata éditée dans ≥ 2 langues)."""
+    date_str = date.strftime("%Y%m%d")
+    folder = (
+        DATALAKE_ROOT / "usage" / "wikipediaPulse" / "CrossLanguageEvents"
+        / date_str / "crosslang.snappy.parquet"
+    )
+
+    print(f"Reading cross-language events from {folder}...")
+    df = read_parquet_folder(folder)
+    print(f"  → {len(df)} événements multilingues à indexer")
+
+    actions = list(df_to_actions(df, "wikipedia-crosslang", date_str))
+    success, errors = helpers.bulk(es, actions, raise_on_error=False)
+    print(f"  → {success} docs indexés dans 'wikipedia-crosslang'")
+    if errors:
+        raise RuntimeError(f"{len(errors)} documents rejetés par Elasticsearch : {errors[:3]}")
+    return success
+
+
 def index_leadlag_hourly(es: Elasticsearch, event_day: datetime) -> int:
     """Indexe le lead-lag horaire du jour d'événement (J-1 du run)."""
     date_str = event_day.strftime("%Y%m%d")
@@ -133,6 +159,7 @@ def index_to_elastic(**kwargs):
 
     index_trending(es, date)
     index_leadlag(es, date)
+    index_crosslang(es, date)
     print("=== index_to_elastic done ===")
 
 

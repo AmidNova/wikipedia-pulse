@@ -42,3 +42,11 @@ def test_actions_fall_back_to_project_column_for_hourly_leadlag():
     action = next(ei.df_to_actions(df, "wikipedia-leadlag-hourly", "20261001"))
 
     assert action["_id"] == ei.doc_id("20261001", "fr.wikipedia", "Paris")
+
+
+def test_crosslang_events_are_keyed_by_wikidata_entity():
+    df = pd.DataFrame([{"wikidata_id": "Q243", "titles": "fr:Tour Eiffel | en:Eiffel Tower", "language_count": 2}])
+
+    action = next(ei.df_to_actions(df, "wikipedia-crosslang", "20261001"))
+
+    assert action["_id"] == ei.doc_id("20261001", "wikidata", "Q243")
