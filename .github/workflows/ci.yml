@@ -33,4 +33,4 @@ jobs:
       - name: Unit tests
         env:
           DATALAKE_ROOT: ${{ runner.temp }}/datalake
-        run: python -m pytest test/unit -q
+        run: python -m pytest tests/unit -q

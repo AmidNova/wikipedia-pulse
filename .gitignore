@@ -25,3 +25,6 @@ venv/
 # Spark
 spark-warehouse/
 !.gitkeep
+
+# Fichiers perso (notes, rapport, captures) : gardés en local, jamais publiés
+_local/
