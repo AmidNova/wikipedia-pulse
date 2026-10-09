@@ -13,6 +13,12 @@
 ![Kibana](https://img.shields.io/badge/Kibana-8.13-E8478B?logo=kibana&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
+<br/>
+
+<img src="docs/assets/kibana-dashboard.png" alt="Dashboard Kibana Wikipedia Pulse" width="100%"/>
+
+<sub>Dashboard Kibana sur 5 jours de données réelles (3–7 octobre 2026)</sub>
+
 </div>
 
 ---
@@ -32,6 +38,39 @@ Le pipeline croise les deux chaque jour sur **5 éditions de Wikipedia** (EN, FR
 | Quels articles sortent brutalement de leur comportement habituel ? | `TrendingArticles` : détection robuste par article |
 | Quels sujets traversent les frontières linguistiques ? | `CrossLanguageEvents` : regroupement par entité Wikidata |
 | Les lecteurs suivent-ils les éditeurs, et avec quel retard ? | `EditLeadLagHourly` : corrélation croisée heure par heure |
+
+## Résultats
+
+Sur 5 jours de fonctionnement (3–7 octobre 2026) :
+
+| | |
+| --- | --- |
+| **212 788** éditions captées | **136 035** couples article × jour analysés |
+| **241** articles émergents | **2 246** sujets édités dans au moins 2 langues |
+
+**Un cas concret : Jeffrey Archer (`Q313489`).** Le 5 octobre au soir, l'article est édité en
+anglais puis en français : 2 langues, rien d'anormal. Le 6 octobre, le sujet se propage aux
+**5 langues** en moins de 10 h, en partant du français à 07:32 UTC : 50 éditions, 24 éditeurs
+distincts et **308 750 lectures** cumulées. Le pipeline le marque émergent en anglais
+(14 éditeurs contre une médiane habituelle de 0) et en allemand.
+
+**Qui mène, l'écriture ou la lecture ?** Sur les 4 347 articles assez édités pour mesurer un
+décalage horaire :
+
+| Profil | Part | Décalage médian | Ce que ça veut dire |
+| --- | --- | --- | --- |
+| `simultaneous` | 42 % | 0 h | Éditeurs et lecteurs réagissent dans la même heure |
+| `edit_led` | 23 % | **+12 h** | Les lectures suivent les éditions avec une demi-journée de retard |
+| `decorrelated` | 25 % | n/a | Maintenance éditoriale sans écho dans l'audience |
+| `view_led` | 10 % | −4 h | L'audience arrive d'abord, les éditeurs suivent |
+
+Quand les éditions mènent, la courbe des lectures reproduit celle des éditions avec 12 h de
+retard en médiane, et le pic de lectures atteint environ 6 fois le trafic horaire habituel de
+l'article. C'est le signal avancé que le projet cherche à capter.
+
+> Ces chiffres couvrent une semaine : les lignes de base par article (28 jours) n'étaient pas
+> encore remplies, d'où beaucoup de médianes habituelles à 0. La détection se resserre à mesure
+> que l'historique s'accumule.
 
 ## Architecture
 
@@ -64,18 +103,9 @@ les trois couches du datalake avant l'indexation.
 
 ## Le DAG
 
-```mermaid
-flowchart LR
-    E1[edits_stream_to_raw] --> E2[raw_to_formatted_edits]
-    P1[pageviews_to_raw] --> P2[raw_to_formatted_pageviews]
-    E2 --> W1[wikidata_to_raw] --> W2[raw_to_formatted_wikidata]
-    E2 --> H1[hourly_pageviews_to_raw] --> H2[raw_to_formatted_hourly_pageviews]
+![DAG wikipedia_pulse dans Airflow 3](docs/assets/airflow-dag.png)
 
-    E2 & P2 & W2 & H2 --> PULSE[produce_pulse]
-    PULSE --> IDX[index_to_elastic]
-    PULSE --> LL[produce_leadlag]
-    H2 --> LL --> IDXH[index_leadlag_hourly]
-```
+<sub>Run du 7 octobre 2026 dans Airflow 3 : 12 tâches, 13 min 33 s de bout en bout.</sub>
 
 | Tâche | Rôle |
 | --- | --- |
@@ -248,6 +278,7 @@ wikipedia-pulse/
 ├── kafka/producer.py              # SSE → Kafka, tourne en continu
 ├── kibana/                        # dashboard versionné (générateur + export)
 ├── tests/unit/                    # tests unitaires (pytest)
+├── docs/assets/                   # captures du README
 ├── datalake/                      # raw / formatted / usage (non versionné)
 ├── Dockerfile                     # Airflow 3.3 + JDK pour PySpark
 ├── docker-compose.yaml            # stack complète
