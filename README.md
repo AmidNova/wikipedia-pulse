@@ -11,6 +11,7 @@
 ![Kafka](https://img.shields.io/badge/Kafka-3.7-231F20?logo=apachekafka&logoColor=white)
 ![Elasticsearch](https://img.shields.io/badge/Elasticsearch-8.13-005571?logo=elasticsearch&logoColor=white)
 ![Kibana](https://img.shields.io/badge/Kibana-8.13-E8478B?logo=kibana&logoColor=white)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
 
@@ -265,3 +266,7 @@ wikipedia-pulse/
 | **Kibana 8.13** | Visualisation, dashboard as code |
 | **PostgreSQL** | Métadonnées Airflow |
 | **Docker Compose** | Toute la stack en une commande |
+
+## Licence
+
+Distribué sous licence [MIT](LICENSE).
